@@ -219,7 +219,7 @@ async def main(loop):
     logger.info("Cleanup done")
 
     logger.info("Performing initial ChirpStack devices list sync")
-    await ran_chirpstack_devices.sync_from_remote()
+    await ran_chirpstack_devices.sync_from_remote(settings.CHIRPSTACK_BATCH_SIZE)
     logger.info("Devices synced")
 
     logger.info("Performing initial ChirpStack multicast groups list sync")

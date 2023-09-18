@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional, Protocol
@@ -30,12 +31,12 @@ class Device:
         if type(self) != type(other):
             return False
         return (
-            self.dev_eui == other.dev_eui
-            and self.dev_addr == other.dev_addr
-            and self.app_s_key == other.app_s_key
-            and self.nwk_s_enc_key == other.nwk_s_enc_key
-            and self.nwk_key == other.nwk_key
-            and self.app_key == other.app_key
+                self.dev_eui == other.dev_eui
+                and self.dev_addr == other.dev_addr
+                and self.app_s_key == other.app_s_key
+                and self.nwk_s_enc_key == other.nwk_s_enc_key
+                and self.nwk_key == other.nwk_key
+                and self.app_key == other.app_key
         )
 
     async def sync_from_remote(self, update_local_list: bool = True, trigger_update_callback: bool = False):
@@ -97,7 +98,7 @@ class DeviceList(Protocol):
 
     # This method must sync devices with remote
     @abstractmethod
-    async def sync_from_remote(self):
+    async def sync_from_remote(self, batch_size):
         pass
 
     # Internal methods, required for "Device" interaction
@@ -149,12 +150,12 @@ class BaseChirpstackDeviceList(DeviceList):
 
 class ApplicationDeviceList(BaseChirpstackDeviceList):
     def __init__(
-        self,
-        chirpstack_api: ChirpStackAPI,
-        application_id: int,
-        org_id: int = 0,
-        tags: Optional[Dict[str, str]] = None,
-        update_hook: None | BaseUpdateHook = None,
+            self,
+            chirpstack_api: ChirpStackAPI,
+            application_id: int,
+            org_id: int = 0,
+            tags: Optional[Dict[str, str]] = None,
+            update_hook: None | BaseUpdateHook = None,
     ) -> None:
         super().__init__(chirpstack_api, update_hook=update_hook)
         self._application_id = application_id
@@ -179,16 +180,45 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
             if device.device_profile_id in device_profile_ids:
                 yield device
 
-    async def sync_from_remote(self) -> None:
+    async def sync_from_remote(self, batch_size) -> None:
         dev_eui_to_device: Dict[str, Device] = {}
         dev_addr_to_dev_eui: Dict[str, str] = {}
 
-        matched_devices_profile_ids = [mdp.id async for mdp in self._get_matched_device_profiles()]
-        async for device in self._get_devices_by_device_profile(matched_devices_profile_ids):
-            dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
+        async def throttle(task_generator, max_tasks):
+            it = task_generator().__aiter__()
+            cancelled = False
 
-        async for device in self._api.get_devices(self._application_id, self._tags):
-            dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
+            async def worker():
+                async for task in it:
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        if cancelled:
+                            raise
+
+            work = [asyncio.create_task(worker()) for _ in range(max_tasks)]
+            try:
+                await asyncio.gather(*work)
+            except Exception as e:
+                cancelled = True
+                for t in work:
+                    t.cancel()
+                raise
+
+        async def _pull_device_helper(_device):
+            dev_eui_to_device[_device.dev_eui] = await self._pull_device_from_remote(_device.dev_eui)
+
+        async def _get_devices_from_profile_task_gen(_matched_devices_profile_ids) -> AsyncIterator:
+            async for _device in self._get_devices_by_device_profile(_matched_devices_profile_ids):
+                yield asyncio.create_task(_pull_device_helper(_device))
+
+        async def _get_devices_task_gen() -> AsyncIterator:
+            async for _device in self._api.get_devices(self._application_id, self._tags):
+                yield asyncio.create_task(_pull_device_helper(_device))
+
+        matched_devices_profile_ids = [mdp.id async for mdp in self._get_matched_device_profiles()]
+        await throttle(_get_devices_from_profile_task_gen(matched_devices_profile_ids), batch_size)
+        await throttle(_get_devices_task_gen(), batch_size)
 
         for dev_eui, device in dev_eui_to_device.items():
             if device.dev_addr:
@@ -333,18 +363,18 @@ class _BaseMultiListDeviceList(BaseChirpstackDeviceList):
 
 class MultiApplicationDeviceList(_BaseMultiListDeviceList):
     def __init__(
-        self,
-        chirpstack_api: ChirpStackAPI,
-        tags: Optional[Dict[str, str]] = None,
-        org_id: int = 0,
-        update_hook: None | BaseUpdateHook = None,
+            self,
+            chirpstack_api: ChirpStackAPI,
+            tags: Optional[Dict[str, str]] = None,
+            org_id: int = 0,
+            update_hook: None | BaseUpdateHook = None,
     ) -> None:
         super().__init__(chirpstack_api, update_hook=update_hook)
         self._children: Dict[int, ApplicationDeviceList] = {}  # type: ignore
         self._tags = tags if tags is not None else {}
         self._org_id = org_id
 
-    async def sync_from_remote(self) -> None:
+    async def sync_from_remote(self, batch_size) -> None:
         application_ids = set()
 
         async for application in self._api.get_applications(organization_id=self._org_id):
@@ -359,7 +389,7 @@ class MultiApplicationDeviceList(_BaseMultiListDeviceList):
                 self._children[application.id] = app_dev_list
 
             application_ids.add(application.id)
-            await self._children[application.id].sync_from_remote()
+            await self._children[application.id].sync_from_remote(batch_size)
 
         # Removing applications lists, which was deleted
         for application_id in list(self._children.keys()):
@@ -369,16 +399,16 @@ class MultiApplicationDeviceList(_BaseMultiListDeviceList):
 
 class MultiOrgDeviceList(_BaseMultiListDeviceList):
     def __init__(
-        self,
-        chirpstack_api: ChirpStackAPI,
-        tags: Optional[Dict[str, str]] = None,
-        update_hook: None | BaseUpdateHook = None,
+            self,
+            chirpstack_api: ChirpStackAPI,
+            tags: Optional[Dict[str, str]] = None,
+            update_hook: None | BaseUpdateHook = None,
     ) -> None:
         super().__init__(chirpstack_api, update_hook=update_hook)
         self._children: Dict[str, MultiApplicationDeviceList] = {}  # type: ignore
         self._tags = tags if tags is not None else {}
 
-    async def sync_from_remote(self) -> None:
+    async def sync_from_remote(self, batch_size) -> None:
         org_ids = set()
 
         async for org in self._api.get_organizations():
@@ -392,7 +422,7 @@ class MultiOrgDeviceList(_BaseMultiListDeviceList):
                 self._children[org.id] = multi_app_dev_list
 
             org_ids.add(org.id)
-            await self._children[org.id].sync_from_remote()
+            await self._children[org.id].sync_from_remote(batch_size)
 
         # Removing applications lists, which was deleted
         for org_id in list(self._children.keys()):
