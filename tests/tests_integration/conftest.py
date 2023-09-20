@@ -324,7 +324,7 @@ async def chirpstack_router(chirpstack_api: ChirpStackExtendedApi, mqtt_client: 
     gw_id = gateway["gateway_id"]
 
     devices = ApplicationDeviceList(chirpstack_api, application_id=app_id, tags={"ran": "yes"})
-    await devices.sync_from_remote()
+    await devices.sync_from_remote(1)
 
     multicast_groups = ApplicationMulticastGroupList(chirpstack_api, application_id=app_id)
     await multicast_groups.sync_from_remote()
@@ -340,7 +340,7 @@ async def chirpstack_router(chirpstack_api: ChirpStackExtendedApi, mqtt_client: 
     )
 
     async def force_sync():
-        await devices.sync_from_remote()
+        await devices.sync_from_remote(1)
         await multicast_groups.sync_from_remote()
 
     # This is extra method, which can be used to sync devices/multicast groups from chirpstack without periodic update

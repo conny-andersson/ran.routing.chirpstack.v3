@@ -227,7 +227,7 @@ async def main(loop):
     logger.info("Multicast groups synced")
 
     tasks.add(
-        Periodic(ran_chirpstack_devices.sync_from_remote).create_task(
+        Periodic(ran_chirpstack_devices.sync_from_remote, settings.CHIRPSTACK_BATCH_SIZE).create_task(
             stop_event,
             interval=settings.CHIRPSTACK_DEVICES_REFRESH_PERIOD,
             task_name="update_chirpstack_device_list",

@@ -5,7 +5,11 @@ from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional, Protocol
 
+import structlog
+
 from .api import ChirpStackAPI
+
+logger = structlog.getLogger(__name__)
 
 
 @dataclass()
@@ -175,50 +179,47 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
                     if not value or device_profile.tags[key] == value:
                         yield device_profile
 
-    async def _get_devices_by_device_profile(self, device_profile_ids: list) -> AsyncIterator[Device]:
+    async def _get_devices_by_device_profile_or_tags(self, device_profile_ids: list, tags: Dict[str, str]) -> AsyncIterator[Device]:
         async for device in self._api.get_devices(self._application_id):
-            if device.device_profile_id in device_profile_ids:
+            if not tags or device.device_profile_id in device_profile_ids:
                 yield device
+            elif tags:
+                for key, value in tags.items():
+                    if device.tags[key] == value:
+                        yield device
 
     async def sync_from_remote(self, batch_size) -> None:
         dev_eui_to_device: Dict[str, Device] = {}
         dev_addr_to_dev_eui: Dict[str, str] = {}
+        queue = asyncio.Queue(batch_size)
+        sentinel = object()
 
-        async def throttle(task_generator, max_tasks):
-            it = task_generator().__aiter__()
-            cancelled = False
-
-            async def worker():
-                async for task in it:
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        if cancelled:
-                            raise
-
-            work = [asyncio.create_task(worker()) for _ in range(max_tasks)]
-            try:
-                await asyncio.gather(*work)
-            except Exception as e:
-                cancelled = True
-                for t in work:
-                    t.cancel()
-                raise
-
-        async def _pull_device_helper(_device):
+        async def _pull_device_helper(_device) -> None:
             dev_eui_to_device[_device.dev_eui] = await self._pull_device_from_remote(_device.dev_eui)
 
-        async def _get_devices_from_profile_task_gen(_matched_devices_profile_ids) -> AsyncIterator:
-            async for _device in self._get_devices_by_device_profile(_matched_devices_profile_ids):
-                yield asyncio.create_task(_pull_device_helper(_device))
+        async def _get_devices_from_profile_or_tags_producer(device_profile_ids, tags) -> None:
+            num_devices_produced = 0
+            async for _device in self._get_devices_by_device_profile_or_tags(device_profile_ids, tags):
+                await queue.put(_device)
+                num_devices_produced += 1
+                if num_devices_produced % (10 * batch_size) == 0:
+                    logger.info(f"Fetched {num_devices_produced} devices from Chirpstack")
+            for _ in range(batch_size):
+                await queue.put(sentinel)
 
-        async def _get_devices_task_gen() -> AsyncIterator:
-            async for _device in self._api.get_devices(self._application_id, self._tags):
-                yield asyncio.create_task(_pull_device_helper(_device))
+        async def _device_consumer() -> None:
+            while True:
+                _device = await queue.get()
+                if _device == sentinel:
+                    break
+                await _pull_device_helper(_device)
 
+        logger.info("Getting devices", org_id=self._org_id, app_id=self._application_id)
         matched_devices_profile_ids = [mdp.id async for mdp in self._get_matched_device_profiles()]
-        await throttle(_get_devices_from_profile_task_gen(matched_devices_profile_ids), batch_size)
-        await throttle(_get_devices_task_gen(), batch_size)
+        await asyncio.gather(
+            _get_devices_from_profile_or_tags_producer(matched_devices_profile_ids, self._tags),
+            *(_device_consumer() for _ in range(batch_size))
+        )
 
         for dev_eui, device in dev_eui_to_device.items():
             if device.dev_addr:
