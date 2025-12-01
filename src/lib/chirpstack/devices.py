@@ -186,8 +186,9 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
         dev_addr_to_dev_eui: Dict[str, str] = {}
 
         matched_devices_profile_ids = [mdp.id async for mdp in self._get_matched_device_profiles()]
-        async for device in self._get_devices_by_device_profile(matched_devices_profile_ids):
-            dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
+        if matched_devices_profile_ids:
+            async for device in self._get_devices_by_device_profile(matched_devices_profile_ids):
+                dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
 
         async for device in self._api.get_devices(self._application_id, self._tags, batch_size=self._batch_size):
             dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
