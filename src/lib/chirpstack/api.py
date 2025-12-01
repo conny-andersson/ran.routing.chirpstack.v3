@@ -108,13 +108,13 @@ class ChirpStackAPI:
         tags: Optional[Dict[str, str]] = None,
         service_profile_id: Optional[str] = None,
         multicast_group_id: Optional[str] = None,
-        batch_size: int = 20,
+        batch_size: Optional[int] = None,
     ) -> AsyncIterator[device_pb2.DeviceListItem]:
         tags = tags if tags is not None else {}
         client = api.DeviceServiceStub(self._channel)
 
         req = api.ListDeviceRequest()
-        req.limit = batch_size
+        req.limit = batch_size or 20
         req.offset = 0
 
         if application_id is not None:

@@ -356,6 +356,7 @@ class ChirpstackTrafficRouter:
 
     async def run(self, stop_event: asyncio.Event):
         chirpstack_downlink_topic = self.chirpstack_downlink_topic_template.format(self.gateway_mac)
+        await self.chirpstack_mqtt_client.wait_for_connection(5)
         await self.chirpstack_mqtt_client.subscribe(chirpstack_downlink_topic)
         async with self.chirpstack_mqtt_client.listen(chirpstack_downlink_topic) as downlink_queue:
             while not stop_event.is_set():

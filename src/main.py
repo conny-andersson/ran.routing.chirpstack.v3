@@ -202,6 +202,7 @@ async def main(loop):
             chirpstack_api=chirpstack_api,
             tags=tags,
             update_hook=ran_devices_sync_hook,
+            batch_size=settings.BATCH_SIZE,
         )
         ran_chirpstack_multicast_groups = chirpstack.MultiOrgMulticastGroupList(
             chirpstack_api=chirpstack_api,
@@ -236,6 +237,7 @@ async def main(loop):
                 tags=tags,
                 org_id=settings.CHIRPSTACK_ORGANIZATION_ID,
                 update_hook=ran_devices_sync_hook,
+                batch_size=settings.BATCH_SIZE,
             )
             ran_chirpstack_multicast_groups = chirpstack.MultiApplicationMulticastGroupList(
                 chirpstack_api=chirpstack_api,
@@ -262,6 +264,7 @@ async def main(loop):
                 org_id=settings.CHIRPSTACK_ORGANIZATION_ID,
                 application_id=settings.CHIRPSTACK_APPLICATION_ID,
                 update_hook=ran_devices_sync_hook,
+                batch_size=settings.CHIRPSTACK_BATCH_SIZE,
             )
             ran_chirpstack_multicast_groups = chirpstack.ApplicationMulticastGroupList(
                 chirpstack_api=chirpstack_api,

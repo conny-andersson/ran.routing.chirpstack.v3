@@ -155,6 +155,7 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
         org_id: int = 0,
         tags: Optional[Dict[str, str]] = None,
         update_hook: None | BaseUpdateHook = None,
+        batch_size: Optional[int] = None,
     ) -> None:
         super().__init__(chirpstack_api, update_hook=update_hook)
         self._application_id = application_id
@@ -162,6 +163,7 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
         self._tags = tags if tags is not None else {}
         self._dev_eui_to_device: Dict[str, Device] = {}
         self._dev_addr_to_dev_eui: Dict[str, str] = {}
+        self._batch_size = batch_size
 
     def get_all_devices(self) -> list[Device]:
         return list(self._dev_eui_to_device.values())
@@ -175,7 +177,7 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
                         yield device_profile
 
     async def _get_devices_by_device_profile(self, device_profile_ids: list) -> AsyncIterator[Device]:
-        async for device in self._api.get_devices(self._application_id):
+        async for device in self._api.get_devices(self._application_id, batch_size=self._batch_size):
             if device.device_profile_id in device_profile_ids:
                 yield device
 
@@ -187,7 +189,7 @@ class ApplicationDeviceList(BaseChirpstackDeviceList):
         async for device in self._get_devices_by_device_profile(matched_devices_profile_ids):
             dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
 
-        async for device in self._api.get_devices(self._application_id, self._tags):
+        async for device in self._api.get_devices(self._application_id, self._tags, batch_size=self._batch_size):
             dev_eui_to_device[device.dev_eui] = await self._pull_device_from_remote(device.dev_eui)
 
         for dev_eui, device in dev_eui_to_device.items():
@@ -276,11 +278,13 @@ class MultiApplicationDeviceList(_BaseMultiListDeviceList):
         tags: Optional[Dict[str, str]] = None,
         org_id: int = 0,
         update_hook: None | BaseUpdateHook = None,
+        batch_size: Optional[int] = None,
     ) -> None:
         super().__init__(chirpstack_api, update_hook=update_hook)
         self._children: Dict[int, ApplicationDeviceList] = {}  # type: ignore
         self._tags = tags if tags is not None else {}
         self._org_id = org_id
+        self._batch_size = batch_size
 
     async def sync_from_remote(self, trigger_update_hook: bool = True) -> None:
         application_ids = set()
@@ -293,6 +297,7 @@ class MultiApplicationDeviceList(_BaseMultiListDeviceList):
                     org_id=self._org_id,
                     tags=self._tags,
                     update_hook=self.update_hook,
+                    batch_size=self._batch_size,
                 )
                 self._children[application.id] = app_dev_list
 
@@ -311,10 +316,12 @@ class MultiOrgDeviceList(_BaseMultiListDeviceList):
         chirpstack_api: ChirpStackAPI,
         tags: Optional[Dict[str, str]] = None,
         update_hook: None | BaseUpdateHook = None,
+        batch_size: Optional[int] = None,
     ) -> None:
         super().__init__(chirpstack_api, update_hook=update_hook)
         self._children: Dict[str, MultiApplicationDeviceList] = {}  # type: ignore
         self._tags = tags if tags is not None else {}
+        self._batch_size = batch_size
 
     async def sync_from_remote(self, trigger_update_hook: bool = True) -> None:
         org_ids = set()
@@ -326,6 +333,7 @@ class MultiOrgDeviceList(_BaseMultiListDeviceList):
                     org_id=org.id,
                     update_hook=self._update_hook,
                     tags=self._tags,
+                    batch_size=self._batch_size,
                 )
                 self._children[org.id] = multi_app_dev_list
 
